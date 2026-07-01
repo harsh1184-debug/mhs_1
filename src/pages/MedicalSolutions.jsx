@@ -1,180 +1,69 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import ScrollReveal from '../components/ScrollReveal'
 import ProductCard from '../components/ProductCard'
 import { useRFQ } from '../components/RFQContext'
 import { clinicalSpecialties, manufacturerBrands } from '../data/products'
-
-const staticProducts = [
-  // Critical Care & ICU
-  {
-    id: 'hamilton-c1',
-    name: 'Hamilton C1 Ventilator',
-    specialty: 'critical-care',
-    brand: 'hamilton',
-    description:
-      'Compact, fully featured ICU ventilator with intelligent weaning protocols and high-flow oxygen therapy.',
-    image: null,
-    pdfUrl: '/docs/hamilton-c1.pdf',
-  },
-  {
-    id: 'hamilton-c6',
-    name: 'Hamilton C6 Ventilator',
-    specialty: 'critical-care',
-    brand: 'hamilton',
-    description:
-      'High-performance ventilator for adult to neonatal critical care with adaptive ventilation modes.',
-    image: null,
-    pdfUrl: '/docs/hamilton-c6.pdf',
-  },
-  {
-    id: 'spacelabs-icgm',
-    name: 'Spacelabs Xhibit Central Station',
-    specialty: 'critical-care',
-    brand: 'spacelabs',
-    description:
-      'Central monitoring system with multi-parameter telemetry for ICU environments.',
-    image: null,
-    pdfUrl: '/docs/spacelabs-xhibit.pdf',
-  },
-
-  // Radiology & Diagnostics
-  {
-    id: 'samsung-rs85',
-    name: 'Samsung RS85 Prestige',
-    specialty: 'radiology',
-    brand: 'samsung',
-    description:
-      'Premium ultrasound system with S-Vue and Crystal Architecture for exceptional image clarity.',
-    image: null,
-    pdfUrl: '/docs/samsung-rs85.pdf',
-  },
-  {
-    id: 'samsung-hs80',
-    name: 'Samsung HS80',
-    specialty: 'radiology',
-    brand: 'samsung',
-    description:
-      'High-end ultrasound system with advanced 3D/4D imaging capabilities for comprehensive diagnostics.',
-    image: null,
-    pdfUrl: '/docs/samsung-hs80.pdf',
-  },
-  {
-    id: 'samsung-gc85',
-    name: 'Samsung GC85 Digital X-Ray',
-    specialty: 'radiology',
-    brand: 'samsung',
-    description:
-      'Digital radiography system with fast workflow, low dose, and high image quality.',
-    image: null,
-    pdfUrl: '/docs/samsung-gc85.pdf',
-  },
-
-  // Ward Infrastructure
-  {
-    id: 'linet-eleganza',
-    name: 'Linet Eleganza 3 ICU Bed',
-    specialty: 'ward-infrastructure',
-    brand: 'linet',
-    description:
-      'Intelligent ICU bed with advanced pressure redistribution, weighing system, and Trendelenburg positioning.',
-    image: null,
-    pdfUrl: '/docs/linet-eleganza3.pdf',
-  },
-  {
-    id: 'linet-axioma',
-    name: 'Linet Axioma Ward Bed',
-    specialty: 'ward-infrastructure',
-    brand: 'linet',
-    description:
-      'Ergonomic general ward bed with smart monitoring and fall prevention features.',
-    image: null,
-    pdfUrl: '/docs/linet-axioma.pdf',
-  },
-  {
-    id: 'linet-multicare',
-    name: 'Linet Multicare ICU Bed',
-    specialty: 'ward-infrastructure',
-    brand: 'linet',
-    description:
-      'Versatile ICU bed with integrated patient monitoring and smart alarm systems.',
-    image: null,
-    pdfUrl: '/docs/linet-multicare.pdf',
-  },
-
-  // Patient Monitoring
-  {
-    id: 'spacelabs-icgm2',
-    name: 'Spacelabs Xhibit Patient Monitor',
-    specialty: 'patient-monitoring',
-    brand: 'spacelabs',
-    description:
-      'Multi-parameter bedside monitor with intuitive touch interface and wireless connectivity.',
-    image: null,
-    pdfUrl: '/docs/spacelabs-monitor.pdf',
-  },
-  {
-    id: 'spacelabs-telemetry',
-    name: 'Spacelabs Telemetry System',
-    specialty: 'patient-monitoring',
-    brand: 'spacelabs',
-    description:
-      'Wireless telemetry system for continuous patient surveillance with alarm management.',
-    image: null,
-    pdfUrl: '/docs/spacelabs-telemetry.pdf',
-  },
-  {
-    id: 'hamilton-m1',
-    name: 'Hamilton M1 Patient Monitor',
-    specialty: 'patient-monitoring',
-    brand: 'hamilton',
-    description:
-      'Integrated patient monitoring system with ventilator synchronization and clinical decision support.',
-    image: null,
-    pdfUrl: '/docs/hamilton-m1.pdf',
-  },
-]
-
-const brandIdMap = {
-  'Hamilton Medical': 'hamilton',
-  'Samsung Healthcare': 'samsung',
-  'Linet': 'linet',
-  'Spacelabs Healthcare': 'spacelabs',
-}
-
-const specialtyIdMap = {
-  'Critical Care': 'critical-care',
-  'Radiology': 'radiology',
-  'Ward Infrastructure': 'ward-infrastructure',
-  'Patient Monitoring': 'patient-monitoring',
-}
-
-const useProducts = () => {
-  const stored = localStorage.getItem('mockProducts')
-  const mockProducts = stored ? JSON.parse(stored) : []
-  const merged = [
-    ...staticProducts,
-    ...mockProducts.map((p) => ({
-      id: p.id,
-      name: p.name,
-      specialty: specialtyIdMap[p.category] || p.category,
-      brand: brandIdMap[p.brand] || p.brand,
-      description: p.description,
-      image: p.imageUrls && p.imageUrls.length > 0 ? p.imageUrls[0] : null,
-      pdfUrl: p.pdfUrl || '',
-    })),
-  ]
-  return merged
-}
+import { supabase } from '../config/supabaseClient'
 
 export default function MedicalSolutions() {
   const [viewMode, setViewMode] = useState('specialty') // 'specialty' | 'brand'
   const [activeFilter, setActiveFilter] = useState('critical-care')
+  const [products, setProducts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const { items, isOpen, setIsOpen, removeItem, updateQuantity, totalItems } = useRFQ()
 
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchProducts = async () => {
+      setLoading(true)
+      setError(null)
+
+      try {
+        const { data, error: fetchError } = await supabase
+          .from('products')
+          .select('*')
+
+        if (cancelled) return
+
+        if (fetchError) {
+          throw new Error(fetchError.message)
+        }
+
+        // Map database fields to the component's expected shape
+        const mapped = (data || []).map((item) => ({
+          id: item.slug,
+          name: item.name,
+          specialty: item.specialty,
+          brand: item.brand,
+          description: item.description,
+          image: item.image_url,
+          pdfUrl: item.pdf_url,
+        }))
+
+        setProducts(mapped)
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || 'Failed to load products')
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    fetchProducts()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const filters = viewMode === 'specialty' ? clinicalSpecialties : manufacturerBrands
-  const products = useProducts()
 
   const filteredProducts = useMemo(() => {
     const key = viewMode === 'specialty' ? 'specialty' : 'brand'
@@ -291,7 +180,30 @@ export default function MedicalSolutions() {
             </div>
           </ScrollReveal>
 
-          {filteredProducts.length > 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-10 h-10 border-4 border-surgical-teal/30 border-t-surgical-teal rounded-full animate-spin" />
+                <p className="text-sm text-text-muted">Loading products...</p>
+              </div>
+            </div>
+          ) : error ? (
+            <div className="text-center py-20">
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-red-50 mb-4">
+                <svg className="w-7 h-7 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <p className="text-text-muted mb-2">Unable to load products</p>
+              <p className="text-sm text-red-500 mb-4">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 text-sm font-medium text-surgical-teal border border-surgical-teal rounded-sm hover:bg-surgical-teal/10 transition-all"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : filteredProducts.length > 0 ? (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
               {filteredProducts.map((product, i) => (
                 <ScrollReveal key={product.id} delay={i * 80} className="h-full">

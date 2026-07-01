@@ -13,6 +13,7 @@ import Contact from './pages/Contact.jsx'
 import AdminLogin from './pages/AdminLogin.jsx'
 import AdminSignup from './pages/AdminSignup.jsx'
 import AdminDashboard from './pages/AdminDashboard.jsx'
+import ProtectedRoute from './components/ProtectedRoute.jsx'
 import './index.css'
 
 createRoot(document.getElementById('root')).render(
@@ -31,10 +32,14 @@ createRoot(document.getElementById('root')).render(
                 <Route path="service" element={<ServiceSupport />} />
                 <Route path="contact" element={<Contact />} />
                 
-                {/* Admin routes - always accessible */}
-                <Route path="admin" element={<AdminDashboard />} />
+                {/* Admin auth pages - public */}
                 <Route path="admin/login" element={<AdminLogin />} />
                 <Route path="admin/signup" element={<AdminSignup />} />
+
+                {/* Admin dashboard - protected by authentication */}
+                <Route element={<ProtectedRoute />}>
+                  <Route path="admin" element={<AdminDashboard />} />
+                </Route>
               </Route>
             </Routes>
           </RFQProvider>

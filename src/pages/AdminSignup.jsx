@@ -16,9 +16,10 @@ export default function AdminSignup() {
     setLoading(true)
     setError('')
     try {
-      register()
+      await register(form.email, form.password)
+      navigate('/admin')
     } catch (err) {
-      setError('Registration failed')
+      setError(err.message || 'Registration failed')
     } finally {
       setLoading(false)
     }

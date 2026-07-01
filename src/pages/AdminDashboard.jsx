@@ -1,7 +1,37 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { Helmet } from 'react-helmet-async'
-import ScrollReveal from '../components/ScrollReveal'
+import { supabase } from '../config/supabaseClient'
+
+// Mapping dictionaries for display name ↔ internal ID conversion
+const brandDisplayToId = {
+  'Hamilton Medical': 'hamilton',
+  'Samsung Healthcare': 'samsung',
+  'Linet': 'linet',
+  'Spacelabs Healthcare': 'spacelabs',
+}
+
+const brandIdToDisplay = Object.fromEntries(
+  Object.entries(brandDisplayToId).map(([k, v]) => [v, k])
+)
+
+const specialtyDisplayToId = {
+  'Critical Care': 'critical-care',
+  'Radiology': 'radiology',
+  'Ward Infrastructure': 'ward-infrastructure',
+  'Patient Monitoring': 'patient-monitoring',
+}
+
+const specialtyIdToDisplay = Object.fromEntries(
+  Object.entries(specialtyDisplayToId).map(([k, v]) => [v, k])
+)
+
+// Generate a URL-safe slug from a product name
+const generateSlug = (name) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth()
@@ -10,6 +40,10 @@ export default function AdminDashboard() {
   const [error, setError] = useState('')
   const [showAddForm, setShowAddForm] = useState(false)
   const [editId, setEditId] = useState(null)
+  const [imageFile, setImageFile] = useState(null)
+  const [pdfFile, setPdfFile] = useState(null)
+  const [existingImageUrl, setExistingImageUrl] = useState('')
+  const [existingPdfUrl, setExistingPdfUrl] = useState('')
   const [form, setForm] = useState({
     name: '',
     brand: '',
@@ -17,63 +51,134 @@ export default function AdminDashboard() {
     description: '',
     imageUrls: [],
     pdfUrl: '',
-    isPublished: true
+    isPublished: true,
   })
   const [saveLoading, setSaveLoading] = useState(false)
 
-  useEffect(() => {
-    // Load mock products from localStorage or use default
-    const stored = localStorage.getItem('mockProducts')
-    if (stored) {
-      setProducts(JSON.parse(stored))
-    } else {
-      const defaultProducts = [
-        {
-          id: '1',
-          name: 'Hamilton Medical HAMILTON-T1',
-          brand: 'Hamilton Medical',
-          category: 'Critical Care',
-          description: 'World\'s first transport ventilator with both active humidification and turbine-driven technology.',
-          imageUrls: [],
-          pdfUrl: '',
-          isPublished: true
-        }
-      ]
-      setProducts(defaultProducts)
-      localStorage.setItem('mockProducts', JSON.stringify(defaultProducts))
-    }
-    setLoading(false)
-  }, [])
-
-  const saveProducts = (newProducts) => {
-    setProducts(newProducts)
-    localStorage.setItem('mockProducts', JSON.stringify(newProducts))
-  }
-
+  // Fetch all products from Supabase on mount
   const fetchProducts = async () => {
-    // No-op: products are loaded from localStorage on mount
+    setLoading(true)
+    setError('')
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (fetchError) throw new Error(fetchError.message)
+
+      // Map DB columns to React-friendly shape for the table
+      const mapped = (data || []).map((item) => ({
+        id: item.id,
+        slug: item.slug,
+        name: item.name,
+        brand: brandIdToDisplay[item.brand] || item.brand,
+        category: specialtyIdToDisplay[item.specialty] || item.specialty,
+        description: item.description,
+        imageUrls: item.image_url ? [item.image_url] : [],
+        pdfUrl: item.pdf_url || '',
+        isPublished: item.is_published ?? true,
+      }))
+
+      setProducts(mapped)
+    } catch (err) {
+      setError(err.message || 'Failed to load products')
+    } finally {
+      setLoading(false)
+    }
   }
+
+  useEffect(() => {
+    fetchProducts()
+  }, [])
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target
-    setForm(prev => ({
+    setForm((prev) => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : type === 'file' ? Array.from(e.target.files) : value
+      [name]:
+        type === 'checkbox'
+          ? checked
+          : type === 'file'
+            ? Array.from(e.target.files)
+            : value,
     }))
+  }
+
+  // Upload a file to Supabase Storage and return the public URL
+  const uploadFile = async (file, folder) => {
+    const filePath = `${Date.now()}-${file.name.replace(/\s+/g, '-')}`
+    const { error: uploadError } = await supabase.storage
+      .from('product-media')
+      .upload(filePath, file)
+    if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`)
+    const { data: { publicUrl } } = supabase.storage
+      .from('product-media')
+      .getPublicUrl(filePath)
+    return publicUrl
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setSaveLoading(true)
+    setError('')
+
     try {
-      let newProducts
-      if (editId) {
-        newProducts = products.map(p => p.id === editId ? { ...form, id: editId } : p)
-      } else {
-        const newProduct = { ...form, id: Date.now().toString() }
-        newProducts = [...products, newProduct]
+      // Map form fields to DB column names
+      const dbBrand = brandDisplayToId[form.brand] || form.brand.toLowerCase()
+      const dbSpecialty = specialtyDisplayToId[form.category] || form.category.toLowerCase().replace(/\s+/g, '-')
+      const slug = generateSlug(form.name)
+
+      // Upload new image if a file was selected; otherwise keep existing
+      let imageUrl = existingImageUrl || null
+      if (imageFile) {
+        imageUrl = await uploadFile(imageFile, 'images')
       }
-      saveProducts(newProducts)
+
+      // Upload new PDF if a file was selected; otherwise keep existing
+      let pdfUrl = existingPdfUrl || null
+      if (pdfFile) {
+        pdfUrl = await uploadFile(pdfFile, 'pdfs')
+      }
+
+      if (editId) {
+        // UPDATE existing product
+        const { error: updateError } = await supabase
+          .from('products')
+          .update({
+            slug,
+            name: form.name,
+            specialty: dbSpecialty,
+            brand: dbBrand,
+            description: form.description,
+            image_url: imageUrl,
+            pdf_url: pdfUrl,
+            is_published: form.isPublished,
+          })
+          .eq('id', editId)
+
+        if (updateError) throw new Error(updateError.message)
+      } else {
+        // INSERT new product
+        const { error: insertError } = await supabase
+          .from('products')
+          .insert([
+            {
+              slug,
+              name: form.name,
+              specialty: dbSpecialty,
+              brand: dbBrand,
+              description: form.description,
+              image_url: imageUrl,
+              pdf_url: pdfUrl,
+              is_published: form.isPublished,
+            },
+          ])
+
+        if (insertError) throw new Error(insertError.message)
+      }
+
+      // Reset form and re-fetch to sync UI with DB
       setForm({
         name: '',
         brand: '',
@@ -81,10 +186,15 @@ export default function AdminDashboard() {
         description: '',
         imageUrls: [],
         pdfUrl: '',
-        isPublished: true
+        isPublished: true,
       })
+      setImageFile(null)
+      setPdfFile(null)
+      setExistingImageUrl('')
+      setExistingPdfUrl('')
       setEditId(null)
       setShowAddForm(false)
+      await fetchProducts()
     } catch (err) {
       setError(err.message || 'Something went wrong')
     } finally {
@@ -92,15 +202,37 @@ export default function AdminDashboard() {
     }
   }
 
-  const togglePublish = async (id, isPublished) => {
-    const newProducts = products.map(p => p.id === id ? { ...p, isPublished: !isPublished } : p)
-    saveProducts(newProducts)
+  const togglePublish = async (id, currentPublished) => {
+    setError('')
+    try {
+      const { error: updateError } = await supabase
+        .from('products')
+        .update({ is_published: !currentPublished })
+        .eq('id', id)
+
+      if (updateError) throw new Error(updateError.message)
+
+      await fetchProducts()
+    } catch (err) {
+      setError(err.message || 'Failed to update publish status')
+    }
   }
 
   const deleteProduct = async (id) => {
     if (!window.confirm('Are you sure you want to archive this product?')) return
-    const newProducts = products.filter(p => p.id !== id)
-    saveProducts(newProducts)
+    setError('')
+    try {
+      const { error: deleteError } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', id)
+
+      if (deleteError) throw new Error(deleteError.message)
+
+      await fetchProducts()
+    } catch (err) {
+      setError(err.message || 'Failed to delete product')
+    }
   }
 
   return (
@@ -119,7 +251,7 @@ export default function AdminDashboard() {
                   Admin Dashboard
                 </h1>
                 <p className="text-sm text-text-muted">
-                  Welcome back, {user?.name || 'Admin'}!
+                  Welcome back, {user?.email || 'Admin'}!
                 </p>
               </div>
               <div className="flex items-center space-x-4">
@@ -199,14 +331,18 @@ export default function AdminDashboard() {
                       <label className="block text-sm font-medium text-primary-blue mb-1">
                         Category
                       </label>
-                      <input
-                        type="text"
+                      <select
                         name="category"
                         value={form.category}
                         onChange={handleChange}
                         className="input-field w-full"
-                        placeholder="e.g., Critical Care, Radiology"
-                      />
+                      >
+                        <option value="">Select category</option>
+                        <option value="Critical Care">Critical Care</option>
+                        <option value="Radiology">Radiology</option>
+                        <option value="Ward Infrastructure">Ward Infrastructure</option>
+                        <option value="Patient Monitoring">Patient Monitoring</option>
+                      </select>
                     </div>
 
                     <div>
@@ -239,30 +375,74 @@ export default function AdminDashboard() {
 
                   <div>
                     <label className="block text-sm font-medium text-primary-blue mb-1">
-                      Image URLs (comma-separated)
+                      Product Image
                     </label>
+                    {existingImageUrl && (
+                      <div className="mb-2 flex items-center gap-2">
+                        <img
+                          src={existingImageUrl}
+                          alt="Current"
+                          className="w-12 h-12 object-cover rounded-sm border border-border-light"
+                        />
+                        <a
+                          href={existingImageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-surgical-teal hover:underline truncate"
+                        >
+                          {existingImageUrl}
+                        </a>
+                      </div>
+                    )}
                     <input
-                      type="text"
-                      name="imageUrls"
-                      value={form.imageUrls.join(',')}
-                      onChange={(e) => setForm({ ...form, imageUrls: e.target.value.split(',').map(u => u.trim()).filter(u => u) })}
-                      className="input-field w-full"
-                      placeholder="https://example.com/image1.jpg, https://example.com/image2.jpg"
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files[0]
+                        setImageFile(file || null)
+                      }}
+                      className="input-field w-full file:mr-3 file:py-2 file:px-4 file:rounded-sm file:border-0 file:text-sm file:font-medium file:bg-surgical-teal/10 file:text-surgical-teal hover:file:bg-surgical-teal/20"
                     />
+                    {imageFile && (
+                      <p className="text-xs text-text-muted mt-1">
+                        Selected: {imageFile.name}
+                      </p>
+                    )}
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-primary-blue mb-1">
-                      PDF URL
+                      Product PDF Brochure
                     </label>
+                    {existingPdfUrl && (
+                      <div className="mb-2">
+                        <a
+                          href={existingPdfUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-surgical-teal hover:underline flex items-center gap-1"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          Current PDF: {existingPdfUrl.split('/').pop()}
+                        </a>
+                      </div>
+                    )}
                     <input
-                      type="text"
-                      name="pdfUrl"
-                      value={form.pdfUrl}
-                      onChange={handleChange}
-                      className="input-field w-full"
-                      placeholder="https://example.com/brochure.pdf"
+                      type="file"
+                      accept="application/pdf"
+                      onChange={(e) => {
+                        const file = e.target.files[0]
+                        setPdfFile(file || null)
+                      }}
+                      className="input-field w-full file:mr-3 file:py-2 file:px-4 file:rounded-sm file:border-0 file:text-sm file:font-medium file:bg-surgical-teal/10 file:text-surgical-teal hover:file:bg-surgical-teal/20"
                     />
+                    {pdfFile && (
+                      <p className="text-xs text-text-muted mt-1">
+                        Selected: {pdfFile.name}
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex justify-end space-x-3">
@@ -271,6 +451,10 @@ export default function AdminDashboard() {
                       onClick={() => {
                         setShowAddForm(false)
                         setEditId(null)
+                        setImageFile(null)
+                        setPdfFile(null)
+                        setExistingImageUrl('')
+                        setExistingPdfUrl('')
                         setForm({
                           name: '',
                           brand: '',
@@ -278,7 +462,7 @@ export default function AdminDashboard() {
                           description: '',
                           imageUrls: [],
                           pdfUrl: '',
-                          isPublished: true
+                          isPublished: true,
                         })
                       }}
                       className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-700"
@@ -290,7 +474,7 @@ export default function AdminDashboard() {
                       disabled={saveLoading}
                       className="btn-teal"
                     >
-                      {saveLoading ? 'Saving...' : 'Save Product'}
+                      {saveLoading ? 'Uploading Media...' : 'Save Product'}
                     </button>
                   </div>
                 </form>
@@ -300,8 +484,11 @@ export default function AdminDashboard() {
             {/* Products Table */}
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
               {loading ? (
-                <div className="text-center py-8">
-                  Loading products...
+                <div className="flex items-center justify-center py-12">
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="w-10 h-10 border-4 border-surgical-teal/30 border-t-surgical-teal rounded-full animate-spin" />
+                    <p className="text-sm text-text-muted">Loading products...</p>
+                  </div>
                 </div>
               ) : products.length === 0 ? (
                 <div className="text-center py-8 text-text-muted">
@@ -341,8 +528,13 @@ export default function AdminDashboard() {
                           {product.category}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${product.isPublished ? 'bg-surgical-teal/10 text-surgical-teal' : 'bg-red-500/10 text-red-500'
-                            }`}>
+                          <span
+                            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                              product.isPublished
+                                ? 'bg-surgical-teal/10 text-surgical-teal'
+                                : 'bg-red-500/10 text-red-500'
+                            }`}
+                          >
                             {product.isPublished ? 'Published' : 'Archived'}
                           </span>
                         </td>
@@ -350,6 +542,14 @@ export default function AdminDashboard() {
                           <button
                             onClick={() => {
                               setEditId(product.id)
+                              setImageFile(null)
+                              setPdfFile(null)
+                              setExistingImageUrl(
+                                product.imageUrls && product.imageUrls.length > 0
+                                  ? product.imageUrls[0]
+                                  : ''
+                              )
+                              setExistingPdfUrl(product.pdfUrl || '')
                               setForm({
                                 name: product.name,
                                 brand: product.brand,
@@ -357,7 +557,7 @@ export default function AdminDashboard() {
                                 description: product.description,
                                 imageUrls: product.imageUrls || [],
                                 pdfUrl: product.pdfUrl || '',
-                                isPublished: product.isPublished
+                                isPublished: product.isPublished,
                               })
                               setShowAddForm(true)
                             }}
@@ -366,10 +566,16 @@ export default function AdminDashboard() {
                             Edit
                           </button>
                           <button
+                            onClick={() => togglePublish(product.id, product.isPublished)}
+                            className="text-amber-600 hover:text-amber-700"
+                          >
+                            {product.isPublished ? 'Archive' : 'Publish'}
+                          </button>
+                          <button
                             onClick={() => deleteProduct(product.id)}
                             className="text-red-500 hover:text-red-600"
                           >
-                            Archive
+                            Delete
                           </button>
                         </td>
                       </tr>

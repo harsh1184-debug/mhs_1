@@ -16,9 +16,10 @@ export default function AdminLogin() {
     setLoading(true)
     setError('')
     try {
-      login()
+      await login(form.email, form.password)
+      navigate('/admin')
     } catch (err) {
-      setError('Login failed')
+      setError(err.message || 'Login failed')
     } finally {
       setLoading(false)
     }
