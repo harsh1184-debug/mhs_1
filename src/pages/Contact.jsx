@@ -117,8 +117,8 @@ ${items.length > 0 ? items.map((i) => `- ${i.name} (Qty: ${i.quantity})`).join('
                       <div className="w-9 h-9 bg-surgical-teal/10 rounded-sm flex items-center justify-center shrink-0">
                         <HiPhone className="text-surgical-teal" size={18} />
                       </div>
-                      <a href="tel:+919814200579" className="text-sm text-text-muted hover:text-surgical-teal transition-colors duration-200">
-                        +91 9814200579
+                      <a href="tel:+919316666888" className="text-sm text-text-muted hover:text-surgical-teal transition-colors duration-200">
+                        +91 9316666888
                       </a>
                     </div>
 
